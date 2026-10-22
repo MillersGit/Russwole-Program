@@ -188,6 +188,18 @@ h1 { margin: 8px 0 0; font: 700 clamp(40px, 11vw, 60px)/.92 var(--f-display); te
 .si::placeholder { color: var(--muted); font-size: 13px; opacity: 1; }
 .lift.is-done .si { background: var(--inset); }
 
+.swbtn { margin-left: auto; flex: none; min-height: 32px; padding: 0 10px; border: 1px solid var(--rule); background: var(--panel); color: var(--muted); font: 500 11px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
+.swbtn[aria-expanded="true"] { border-color: var(--ink); color: var(--ink); }
+.swp { margin-top: 10px; padding: 12px; border: 1.5px solid var(--ink); background: var(--inset); display: flex; flex-direction: column; gap: 10px; }
+.sl { font: 500 11px/1.3 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.swi { width: 100%; height: 44px; border: 1.5px solid var(--ink); background: var(--panel); border-radius: 0; padding: 0 10px; font: 500 16px var(--f-body); }
+.sug { display: flex; flex-wrap: wrap; gap: 6px; }
+.sug button { min-height: 36px; padding: 0 10px; border: 1px solid var(--rule); background: var(--panel); font-size: 13px; font-weight: 500; }
+.swa { display: flex; flex-wrap: wrap; gap: 8px; }
+.swa .btn { flex: 1 1 140px; min-height: 44px; padding: 0 10px; font-size: 13px; }
+.swx { align-self: flex-start; min-height: 36px; padding: 0 4px; border: 0; background: none; color: var(--muted); font-size: 13px; text-decoration: underline; }
+.chip.sw { border-color: var(--ink); color: var(--ink); }
+
 .foot { display: flex; align-items: center; gap: 10px; font: 400 12px/1.3 var(--f-mono); color: var(--muted); margin-top: 4px; }
 .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--muted); }
 .foot[data-s="synced"] .dot { background: var(--ink); border-color: var(--ink); }
@@ -269,6 +281,7 @@ body { margin: 0; }
   <nav id="weeks" class="weeks" aria-label="Program week"></nav>
 
   <main id="days"></main>
+  <datalist id="exlist"></datalist>
 
   <footer class="foot" id="foot" data-s="local" aria-live="polite">
     <i class="dot" aria-hidden="true"></i><span id="status">Checks and weights save as you go.</span>
@@ -288,9 +301,9 @@ body { margin: 0; }
   var CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>';
 
   // Persisted state. Maxes start as estimates from the first week's sets.
-  var D = { v: 1, updated: 0, maxes: { squat: 175, bench: 125, deadlift: 170 }, log: {}, dates: {} };
+  var D = { v: 1, updated: 0, maxes: { squat: 175, bench: 125, deadlift: 170 }, log: {}, dates: {}, sw: {} };
   // Screen-only state.
-  var ui = { week: 1, open: {}, touched: false, auto: {} };
+  var ui = { week: 1, open: {}, touched: false, auto: {}, swapOpen: null };
   var remote = { doc: null, busy: false, dirty: false };
   var timer = 0;
 
@@ -341,8 +354,34 @@ body { margin: 0; }
     var lo = r5(m * it.p[0] / 100), hi = r5(m * it.p[1] / 100);
     return { lo: lo, text: lo === hi ? String(lo) : lo + '–' + hi };
   }
+  // Swaps: D.sw maps an exercise slot ("week-day-index") to the exercise you do there instead. A swapped
+  // exercise keeps the sets and reps, drops the barbell percentage, and uses its own last weights.
+  var NAMES = {};
+  WEEKS.forEach(function (wk) { wk.days.forEach(function (dy) { dy.items.forEach(function (it) {
+    if (!it.z) NAMES[it.n.toLowerCase()] = it.n;
+  }); }); });
+  var SUGGEST = {
+    squat: ['Hack Squat', 'Leg Press', 'Goblet Squats', 'Smith Machine Squat'],
+    bench: ['Flat DB Bench', 'Machine Chest Press', 'Smith Machine Bench', 'Pushups'],
+    deadlift: ['Romanian Deadlift', 'Trap Bar Deadlift', 'DB RDL', 'Hyper Extensions'],
+    ohp: ['Seated DB Press', 'Machine Shoulder Press', 'Arnold Press']
+  };
+  function kOf(name) {
+    var s = String(name).toLowerCase().replace(/romanian deadlift|romanian dl/g, 'rdl').replace(/[^a-z0-9]/g, '');
+    return s.length > 1 && s.charAt(s.length - 1) === 's' ? s.slice(0, -1) : s;
+  }
+  function eff(w, d, it) {
+    var s = D.sw[ikey(w, d, it.i)];
+    if (!s || it.z) return it;
+    var o = {}, p;
+    for (p in it) o[p] = it[p];
+    o.orig = it; o.n = s; o.k = kOf(s);
+    delete o.p; delete o.b; delete o.l; delete o.t;
+    return o;
+  }
+
   function lead(w, d) {
-    var it = getDay(w, d).items[0];
+    var it = eff(w, d, getDay(w, d).items[0]);
     var t = it.n + ' · ' + fmtRx(it);
     if (it.p) t += ' · ' + fmtPct(it.p);
     else if (it.t && it.t.length) t += ' · ' + it.t[0];
@@ -368,8 +407,9 @@ body { margin: 0; }
     var idx = {};
     for (var w = 1; w <= 12; w++) for (var d = 1; d <= 6; d++) {
       var order = (w - 1) * 6 + (d - 1);
-      getDay(w, d).items.forEach(function (it) {
-        if (it.z) return;
+      getDay(w, d).items.forEach(function (raw) {
+        if (raw.z) return;
+        var it = eff(w, d, raw);
         var vals = filled(setsOf(entry(w, d, it.i), nSets(it)));
         if (vals.length) (idx[it.k] = idx[it.k] || []).push({ o: order, v: vals });
       });
@@ -385,8 +425,24 @@ body { margin: 0; }
   }
 
   /* ---------- rendering ---------- */
-  function liftHTML(w, d, it, idx) {
-    if (it.z) return '<li class="lift-note">' + esc(it.n) + '</li>';
+  function swapPanel(key, raw, cur) {
+    var sug = SUGGEST[raw.l] || SUGGEST[raw.b] || [];
+    return '<div class="swp" role="group" aria-label="Swap exercise">' +
+      '<label class="sl" for="swi-' + key + '">Do this instead of ' + esc(raw.n) + '</label>' +
+      '<input class="swi" id="swi-' + key + '" type="text" list="exlist" autocomplete="off" autocapitalize="words" enterkeyhint="done" placeholder="Type an exercise" value="' + esc(cur) + '">' +
+      (sug.length ? '<div class="sug">' + sug.map(function (n) {
+        return '<button type="button" data-act="swap-sug" data-id="' + key + '" data-v="' + esc(n) + '">' + esc(n) + '</button>';
+      }).join('') + '</div>' : '') +
+      '<div class="swa"><button type="button" class="btn" data-act="swap-do" data-scope="one" data-id="' + key + '">Swap this workout</button>' +
+      '<button type="button" class="btn" data-act="swap-do" data-scope="later" data-id="' + key + '">Swap this and later weeks</button></div>' +
+      (cur ? '<div class="swa"><button type="button" class="btn" data-act="swap-undo" data-scope="one" data-id="' + key + '">Put back this workout</button>' +
+        '<button type="button" class="btn" data-act="swap-undo" data-scope="later" data-id="' + key + '">Put back this and later weeks</button></div>' : '') +
+      '<button type="button" class="swx" data-act="swap-open" data-id="' + key + '">Close</button></div>';
+  }
+
+  function liftHTML(w, d, raw, idx) {
+    if (raw.z) return '<li class="lift-note">' + esc(raw.n) + '</li>';
+    var it = eff(w, d, raw), swapped = !!it.orig;
     var key = ikey(w, d, it.i), e = entry(w, d, it.i) || {}, done = !!e.c;
     var tg = target(it), last = it.p ? null : lastFor(idx, it, w, d);
     var meta = '<span class="rx">' + fmtRx(it) + '</span>';
@@ -404,6 +460,10 @@ body { margin: 0; }
     var chips = '';
     if (it.x) chips += '<span class="chip ss">Superset</span>';
     (it.t || []).forEach(function (t) { chips += '<span class="chip">' + esc(t) + '</span>'; });
+    if (swapped) chips = '<span class="chip sw">Swapped from ' + esc(raw.n) + (raw.p ? ' @ ' + fmtPct(raw.p) : '') + '</span>' + chips;
+    var swOpen = ui.swapOpen === key;
+    var swbtn = '<button type="button" class="swbtn" data-act="swap-open" data-id="' + key + '" aria-expanded="' + swOpen + '" aria-label="Swap ' + esc(it.n) + ' for another exercise">Swap</button>';
+    var swpanel = swOpen ? swapPanel(key, raw, swapped ? it.n : '') : '';
     var feel = '';
     if (it.p) {
       feel = '<div class="feel"' + (done ? '' : ' hidden') + '><span>Last set felt</span>' +
@@ -413,7 +473,7 @@ body { margin: 0; }
     }
     return '<li class="lift' + (done ? ' is-done' : '') + '">' +
       '<label class="chk" for="c-' + key + '"><input type="checkbox" id="c-' + key + '"' + (done ? ' checked' : '') + ' aria-label="' + esc(it.n) + ' done"><span class="box">' + CHECK + '</span></label>' +
-      '<div class="info"><div class="nm">' + (it.l ? '<i class="disc d-' + it.l + '" aria-hidden="true"></i>' : '') + '<span class="nm-t">' + esc(it.n) + '</span></div>' +
+      '<div class="info"><div class="nm">' + (it.l ? '<i class="disc d-' + it.l + '" aria-hidden="true"></i>' : '') + '<span class="nm-t">' + esc(it.n) + '</span>' + swbtn + '</div>' + swpanel +
       '<div class="meta">' + meta + '</div>' +
       (chips ? '<div class="chips">' + chips + '</div>' : '') + sets + feel + '</div>' +
       '</li>';
@@ -591,6 +651,40 @@ body { margin: 0; }
     $('db-' + k).hidden = !ui.open[k];
   }
 
+  function cleanName(s) {
+    s = String(s || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (NAMES[s.toLowerCase()]) return NAMES[s.toLowerCase()];
+    return s.replace(/(^|\s)([a-z])/g, function (m, a, b) { return a + b.toUpperCase(); });
+  }
+  function afterSwap() { ui.swapOpen = null; touch(); renderDays(); renderNext(); }
+  function openSwap(key) {
+    ui.swapOpen = ui.swapOpen === key ? null : key;
+    renderDays();
+    var inp = ui.swapOpen ? $('swi-' + ui.swapOpen) : null;
+    if (inp) inp.focus();
+  }
+  // Every slot from this week on that holds the same original exercise.
+  function eachLater(key, fn) {
+    var k = parseKey(key), raw = getDay(k.w, k.d).items[k.i];
+    for (var w = k.w; w <= 12; w++) for (var d = 1; d <= 6; d++) {
+      getDay(w, d).items.forEach(function (it) { if (!it.z && it.k === raw.k) fn(ikey(w, d, it.i)); });
+    }
+  }
+  function doSwap(key, scope) {
+    var inp = $('swi-' + key), name = cleanName(inp && inp.value);
+    if (!name) { if (inp) inp.focus(); return; }
+    var k = parseKey(key), raw = getDay(k.w, k.d).items[k.i];
+    if (kOf(name) === kOf(raw.n)) { undoSwap(key, scope); return; }
+    if (scope === 'later') eachLater(key, function (slot) { D.sw[slot] = name; });
+    else D.sw[key] = name;
+    afterSwap();
+  }
+  function undoSwap(key, scope) {
+    if (scope === 'later') eachLater(key, function (slot) { delete D.sw[slot]; });
+    else delete D.sw[key];
+    afterSwap();
+  }
+
   $('days').addEventListener('click', function (ev) {
     var t = ev.target.closest('[data-act]');
     if (!t) return;
@@ -598,6 +692,13 @@ body { margin: 0; }
     if (act === 'toggle') toggleDay(t.getAttribute('data-k'));
     else if (act === 'fill') fillWeights(t.getAttribute('data-id'), t.getAttribute('data-v'));
     else if (act === 'feel') setFeel(t);
+    else if (act === 'swap-open') openSwap(t.getAttribute('data-id'));
+    else if (act === 'swap-sug') {
+      var inp = $('swi-' + t.getAttribute('data-id'));
+      if (inp) { inp.value = t.getAttribute('data-v'); inp.focus(); }
+    }
+    else if (act === 'swap-do') doSwap(t.getAttribute('data-id'), t.getAttribute('data-scope'));
+    else if (act === 'swap-undo') undoSwap(t.getAttribute('data-id'), t.getAttribute('data-scope'));
   });
   $('days').addEventListener('change', function (ev) {
     if (ev.target.matches('input[type="checkbox"]')) onCheck(ev.target);
@@ -637,7 +738,7 @@ body { margin: 0; }
     $('foot').setAttribute('data-s', s);
     $('status').textContent = text;
   }
-  function payload() { return { v: 1, updated: D.updated, maxes: D.maxes, log: D.log, dates: D.dates }; }
+  function payload() { return { v: 1, updated: D.updated, maxes: D.maxes, log: D.log, dates: D.dates, sw: D.sw }; }
   function saveLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(payload())); } catch (e) { /* storage can be blocked */ } }
   function flush() {
     remote.busy = true; remote.dirty = false;
@@ -668,6 +769,7 @@ body { margin: 0; }
     ui.auto = {};
     D.log = r.log;
     D.dates = (r.dates && typeof r.dates === 'object') ? r.dates : {};
+    D.sw = (r.sw && typeof r.sw === 'object') ? r.sw : {};
     if (r.maxes && typeof r.maxes === 'object') {
       ['squat', 'bench', 'deadlift'].forEach(function (k) { if (r.maxes[k] >= 0) D.maxes[k] = +r.maxes[k]; });
     }
@@ -723,6 +825,7 @@ body { margin: 0; }
   var n0 = nextSession();
   ui.week = n0 ? n0.w : 12;
   openDefault(ui.week);
+  $('exlist').innerHTML = Object.keys(NAMES).sort().map(function (k) { return '<option value="' + esc(NAMES[k]) + '">'; }).join('');
   buildWeeks();
   renderAll();
   centerWeek();
