@@ -1,5 +1,5 @@
 /* Offline cache for the Russwole journal. Opens instantly from the cache, then refreshes it in the background. */
-var CACHE = 'russwole-232743ce';
+var CACHE = 'russwole-1b202f35';
 var FILES = ['./', 'index.html', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));

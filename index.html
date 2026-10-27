@@ -144,6 +144,11 @@ h1 { margin: 8px 0 0; font: 700 clamp(40px, 11vw, 60px)/.92 var(--f-display); te
 .dh[aria-expanded="true"] .chev { transform: rotate(180deg); }
 .db { border-top: 1px solid var(--rule); }
 .lifts { list-style: none; margin: 0; padding: 0; }
+.day-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--rule); }
+.day-foot .btn-finish { min-height: 40px; padding: 0 16px; border: 1.5px solid var(--ink); background: var(--ink); color: var(--on-ink); font-weight: 600; font-size: 13px; letter-spacing: .03em; }
+.day-foot .btn-finish:active { opacity: .75; }
+.day-foot .foot-done { font: 500 12px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.day-foot .btn-unfinish { background: none; border: none; padding: 0; font: 500 11px var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); text-decoration: underline; }
 
 .lift { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 0 10px; align-items: start; padding: 8px 14px 14px 6px; border-top: 1px solid var(--rule); }
 .lift:first-child { border-top: 0; }
@@ -301,7 +306,7 @@ body { margin: 0; }
   var CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>';
 
   // Persisted state. Maxes start as estimates from the first week's sets.
-  var D = { v: 1, updated: 0, maxes: { squat: 175, bench: 125, deadlift: 170 }, log: {}, dates: {}, sw: {} };
+  var D = { v: 1, updated: 0, maxes: { squat: 175, bench: 125, deadlift: 170 }, log: {}, dates: {}, sw: {}, fin: {} };
   // Screen-only state.
   var ui = { week: 1, open: {}, touched: false, auto: {}, swapOpen: null };
   var remote = { doc: null, busy: false, dirty: false };
@@ -333,7 +338,8 @@ body { margin: 0; }
       var e = entry(w, d, it.i);
       if (e && e.c) done++;
     });
-    return { total: total, done: done, complete: total > 0 && done === total };
+    var forced = !!D.fin[dkey(w, d)];
+    return { total: total, done: done, complete: (total > 0 && done === total) || forced, forced: forced };
   }
   function weekDone(w) {
     var n = 0;
@@ -479,6 +485,21 @@ body { margin: 0; }
       '</li>';
   }
 
+  function dayFootHTML(w, d, st) {
+    var k = dkey(w, d);
+    if (st.complete && st.forced) {
+      var dateStr = D.dates[k] ? fmtDate(D.dates[k]) : '';
+      return '<div class="day-foot">' +
+        '<span class="foot-done">Finished' + (dateStr ? ' · ' + dateStr : '') + '</span>' +
+        '<button type="button" class="btn-unfinish" data-act="unfinish" data-k="' + k + '">Undo</button>' +
+        '</div>';
+    }
+    if (st.complete) return '';
+    return '<div class="day-foot">' +
+      '<button type="button" class="btn-finish" data-act="finish" data-k="' + k + '">Finish Workout</button>' +
+      '</div>';
+  }
+
   function dayHTML(w, d, idx) {
     var k = dkey(w, d), st = dayStats(w, d), open = !!ui.open[k], date = D.dates[k];
     var sub = (date ? fmtDate(date) + ' · ' : '') + (st.done ? st.done + ' of ' + st.total + ' done' : st.total + ' exercises');
@@ -489,7 +510,9 @@ body { margin: 0; }
       '<span class="dmeta">' + (st.complete ? '<span class="stamp">Done</span>' : '<span class="cnt">' + st.done + '/' + st.total + '</span>') + CHEV + '</span>' +
       '</button>' +
       '<div class="db" id="db-' + k + '" role="region" aria-label="Week ' + w + ', day ' + d + '"' + (open ? '' : ' hidden') + '>' +
-      '<ol class="lifts">' + getDay(w, d).items.map(function (it) { return liftHTML(w, d, it, idx); }).join('') + '</ol></div></section>';
+      '<ol class="lifts">' + getDay(w, d).items.map(function (it) { return liftHTML(w, d, it, idx); }).join('') + '</ol>' +
+      dayFootHTML(w, d, st) +
+      '</div></section>';
   }
 
   function renderDays() {
@@ -650,6 +673,24 @@ body { margin: 0; }
     $('dh-' + k).setAttribute('aria-expanded', String(!!ui.open[k]));
     $('db-' + k).hidden = !ui.open[k];
   }
+  function finishDay(k) {
+    var p = k.split('-');
+    D.fin[k] = 1;
+    if (!D.dates[k]) D.dates[k] = todayStr();
+    touch();
+    renderDay(+p[0], +p[1]);
+    renderTop(); renderNext(); updateWeeks();
+  }
+  function unfinishDay(k) {
+    var p = k.split('-');
+    delete D.fin[k];
+    // only clear the date if no sets are checked
+    var st = dayStats(+p[0], +p[1]);
+    if (st.done === 0) delete D.dates[k];
+    touch();
+    renderDay(+p[0], +p[1]);
+    renderTop(); renderNext(); updateWeeks();
+  }
 
   function cleanName(s) {
     s = String(s || '').replace(/\s+/g, ' ').trim().slice(0, 40);
@@ -699,6 +740,8 @@ body { margin: 0; }
     }
     else if (act === 'swap-do') doSwap(t.getAttribute('data-id'), t.getAttribute('data-scope'));
     else if (act === 'swap-undo') undoSwap(t.getAttribute('data-id'), t.getAttribute('data-scope'));
+    else if (act === 'finish') finishDay(t.getAttribute('data-k'));
+    else if (act === 'unfinish') unfinishDay(t.getAttribute('data-k'));
   });
   $('days').addEventListener('change', function (ev) {
     if (ev.target.matches('input[type="checkbox"]')) onCheck(ev.target);
@@ -738,7 +781,7 @@ body { margin: 0; }
     $('foot').setAttribute('data-s', s);
     $('status').textContent = text;
   }
-  function payload() { return { v: 1, updated: D.updated, maxes: D.maxes, log: D.log, dates: D.dates, sw: D.sw }; }
+  function payload() { return { v: 1, updated: D.updated, maxes: D.maxes, log: D.log, dates: D.dates, sw: D.sw, fin: D.fin }; }
   function saveLocal() { try { localStorage.setItem(LS_KEY, JSON.stringify(payload())); } catch (e) { /* storage can be blocked */ } }
   function flush() {
     remote.busy = true; remote.dirty = false;
@@ -770,6 +813,7 @@ body { margin: 0; }
     D.log = r.log;
     D.dates = (r.dates && typeof r.dates === 'object') ? r.dates : {};
     D.sw = (r.sw && typeof r.sw === 'object') ? r.sw : {};
+    D.fin = (r.fin && typeof r.fin === 'object') ? r.fin : {};
     if (r.maxes && typeof r.maxes === 'object') {
       ['squat', 'bench', 'deadlift'].forEach(function (k) { if (r.maxes[k] >= 0) D.maxes[k] = +r.maxes[k]; });
     }
